@@ -9,8 +9,11 @@
 > - 去掉运行计数（hits.xykt.de）与广告拉取
 > - 修复 macOS 自带 BSD xargs 导致的黑名单检测失败
 > - JSON 新增 `Rating`，保存来源自带的文字评级（目前为 ipapi 的 `Very Low` / `Low` / `Elevated` / `High` / `Very High`）
+> - 修复邮件出站：分别连接各服务 MX 的 TCP 25，使用临时源端口，不因本机监听或已有 SMTP 连接置空，也不使用单个基准服务器覆盖其他结果；按 IPv4 / IPv6 分别解析地址，NAT 的公网 IP 不用于本地绑定。没有 MX / 对应协议地址或检测工具异常时保留 null，新增 `Mail.Diagnostics` 说明原因。测试网络连通性，不发送邮件。
 >
 > 其余代码与上游一致，许可证沿用 AGPL-3.0。
+
+邮件检测的离线回归检查：`python3 -m unittest discover -s tests -v`（需要 Bash 4+ 与 jq，不连接任何真实邮件服务器）。
 
 ## IP质量体检脚本  -  [IP Quality Check Script (EN)](https://github.com/xykt/IPQuality/blob/main/README_EN.md)
 

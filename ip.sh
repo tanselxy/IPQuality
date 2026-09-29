@@ -2,7 +2,8 @@
 # 基于 xykt/IPQuality（AGPL-3.0）的 fork，2026-09-29 修改：
 # ref/ 数据文件固定到 ref_commit，去掉运行计数与广告，新增 Claude 检测。
 # 2026-09-29：JSON 新增 Rating，保存来源自带的文字评级（目前为 ipapi）。
-script_version="v2026-09-16-tansel.2"
+# 2026-09-29：邮件出站按协议族独立检测，不受本机端口占用或 NAT 影响。
+script_version="v2026-09-16-tansel.3"
 ref_commit="2384a67c756eb35231f5982b34731e522be3653e"
 # Claude.ai 与商业 API 的支持地区（两份名单相同），ISO 3166-1 alpha-2。
 # 来源 https://www.anthropic.com/supported-countries ，2026-09-29 整理。
@@ -80,6 +81,7 @@ declare -A sfactor
 declare -A smedia
 declare -A smail
 declare -A smailstatus
+declare -A smail_reason
 declare -A stail
 declare mode_no=0
 declare mode_yes=0
@@ -239,8 +241,8 @@ smedia[type]="Type:    "
 smail[title]="6. Email service availability and blacklist detection"
 smail[port]="Local Port 25 Outbound: "
 smail[yes]="${Font_Green}Available$Font_Suffix"
-smail[no]="${Font_Red}Blocked$Font_Suffix"
-smail[occupied]="${Font_Yellow}Occupied$Font_Suffix"
+smail[no]="${Font_Red}Unavailable$Font_Suffix"
+smail[occupied]="${Font_Yellow}Not tested$Font_Suffix"
 smail[blocked]="${Font_Red}Remote Port 25 unreachable​$Font_Suffix"
 smail[provider]="Conn: "
 smail[dnsbl]="DNSBL database: "
@@ -362,8 +364,8 @@ smedia[type]="方式：   "
 smail[title]="六、邮局连通性及黑名单检测"
 smail[port]="本地25端口出站："
 smail[yes]="$Font_Green可用$Font_Suffix"
-smail[no]="$Font_Red阻断$Font_Suffix"
-smail[occupied]="$Font_Yellow占用$Font_Suffix"
+smail[no]="$Font_Red不可用$Font_Suffix"
+smail[occupied]="$Font_Yellow未完成$Font_Suffix"
 smail[blocked]="$Font_Red远端25端口不可达​$Font_Suffix"
 smail[provider]="通信："
 smail[dnsbl]="IP地址黑名单数据库："
@@ -1726,17 +1728,37 @@ claude[utype]="${smedia[nodata]}"
 fi
 }
 get_sorted_mx_records(){
-local domain=$1
-dig +short MX $domain|sort -n|head -1|awk '{print $2}'
+local domain=$1 records
+records=$(timeout 5 dig +time=2 +tries=1 +short MX "$domain" 2>/dev/null)||return 1
+printf '%s\n' "$records"|awk '$1 ~ /^[0-9]+$/ && NF == 2 && $2 != "."'|sort -n|head -3|awk '{print $2}'
+}
+mail_reason(){
+if [[ $YY == "en" ]];then printf '%s' "$2";else printf '%s' "$1";fi
+}
+mail_connection_reason(){
+local response=${1,,} status=$2
+if [[ $status -eq 124 || $response == *"timed out"* ]];then
+mail_reason "连接超时" "Connection timed out"
+elif [[ $response == *"refused"* ]];then
+mail_reason "连接被拒绝" "Connection refused"
+elif [[ $response == *"unreachable"* || $response == *"no route"* ]];then
+mail_reason "没有可用的出站路由" "No outbound route"
+elif [[ $response == *"permission denied"* || $response == *"operation not permitted"* ]];then
+mail_reason "本机限制了出站连接" "Outbound connection denied locally"
+else
+mail_reason "连接失败" "Connection failed"
+fi
 }
 check_email_service(){
-local service=$1
-local port=25
-local expected_response="220"
-local domain=""
-local host=""
-local response=""
-local success="false"
+local service=$1 family=$2 domain="" host=""
+local address_type=A address version=IPv4 mx_records addresses response status budget
+local deadline=$((SECONDS+10))
+local -a mx_hosts ip_addresses family_args
+[[ $family == 6 ]]&&address_type=AAAA&&version=IPv6
+family_args=()
+[[ $family == 6 ]]&&family_args=(-6)
+smailstatus[$service]=null
+smail_reason[$service]=""
 case $service in
 "Gmail")domain="gmail.com";;
 "Outlook")domain="outlook.com";;
@@ -1750,42 +1772,75 @@ case $service in
 "Sohu")domain="sohu.com";;
 "Sina")domain="sina.com";;
 "QQ")domain="qq.com";;
-*)return
+*)return;;
 esac
-if [[ -z $host ]];then
-local mx_hosts=($(get_sorted_mx_records $domain))
-for host in "${mx_hosts[@]}";do
-response=$(timeout 5 bash -c "echo -e 'QUIT\r\n' | nc -s $IP -w4 $host $port 2>&1")
-smail_response[$service]=$response
-if [[ $response == *"$expected_response"* ]];then
-success="true"
-smail[$service]="$Font_Black+$Font_Suffix$Back_Green$Font_White$Font_B$service$Font_Suffix"
-smailstatus[$service]="true"
-smail[remote]=1
-break
-fi
-done
+if [[ -n $usePROXY ]];then
+smail_reason[$service]=$(mail_reason "代理模式不检测 SMTP 直连" "SMTP direct connection is not tested in proxy mode")
+elif ! mx_records=$(get_sorted_mx_records "$domain");then
+smail_reason[$service]=$(mail_reason "邮件服务器 DNS 查询失败" "Mail server DNS lookup failed")
+elif [[ -z $mx_records ]];then
+smail_reason[$service]=$(mail_reason "未找到邮件服务器 MX 记录" "No mail server MX records")
 else
-response=$(timeout 5 bash -c "echo -e 'QUIT\r\n' | nc -s $IP -w4 $host $port 2>&1")
-if [[ $response == *"$expected_response"* ]];then
-success="true"
-smail[$service]="$Font_Black+$Font_Suffix$Back_Green$Font_White$Font_B$service$Font_Suffix"
-smailstatus[$service]="true"
+mapfile -t mx_hosts <<<"$mx_records"
+smail_reason[$service]=$(mail_reason "邮件服务器未提供 $version 地址" "Mail server has no $version address")
+for host in "${mx_hosts[@]}";do
+budget=$((deadline-SECONDS))
+[[ $budget -le 0 ]]&&break
+[[ $budget -gt 5 ]]&&budget=5
+if ! addresses=$(timeout "$budget" dig +time=2 +tries=1 +short "$address_type" "$host" 2>/dev/null);then
+[[ ${smailstatus[$service]} == null ]]&&smail_reason[$service]=$(mail_reason "邮件服务器 DNS 查询失败" "Mail server DNS lookup failed")
+continue
+fi
+# dig may also print a CNAME; only pass literal addresses to nc.
+if [[ $family == 6 ]];then
+addresses=$(printf '%s\n' "$addresses"|awk '/^[0-9a-fA-F:]+$/ && /:/ {print}'|head -2)
+else
+addresses=$(printf '%s\n' "$addresses"|awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print}'|head -2)
+fi
+[[ -z $addresses ]]&&continue
+mapfile -t ip_addresses <<<"$addresses"
+for address in "${ip_addresses[@]}";do
+budget=$((deadline-SECONDS))
+[[ $budget -le 0 ]]&&break 2
+[[ $budget -gt 5 ]]&&budget=5
+# Ephemeral source port; never bind a public NAT IP not assigned locally.
+# -z checks TCP connectivity without sending mail or waiting for a banner.
+response=$(LC_ALL=C timeout "$budget" nc "${family_args[@]}" "${mail_source_args[@]}" -z -w4 "$address" 25 2>&1)
+status=$?
+if [[ $status -eq 0 ]];then
+smailstatus[$service]=true
+smail_reason[$service]=""
 smail[remote]=1
+break 2
 fi
+if [[ $status -eq 126 || $status -eq 127 || $response == *"invalid option"* || $response == *"illegal option"* || $response == *"unrecognized option"* || $response == *"Unknown option"* ]];then
+[[ ${smailstatus[$service]} == null ]]&&smail_reason[$service]=$(mail_reason "邮件检测工具不支持当前协议或未安装" "Mail probing tool is missing or does not support this protocol")
+continue
 fi
-if [[ $success == "false" ]];then
-smail[$service]="$Font_Black-$Font_Suffix$Back_Red$Font_White$Font_B$service$Font_Suffix"
-smailstatus[$service]="false"
+smailstatus[$service]=false
+smail_reason[$service]=$(mail_connection_reason "$response" "$status")
+done
+done
 fi
+case ${smailstatus[$service]} in
+true)smail[$service]="$Font_Black+$Font_Suffix$Back_Green$Font_White$Font_B$service$Font_Suffix";;
+false)smail[$service]="$Font_Black-$Font_Suffix$Back_Red$Font_White$Font_B$service$Font_Suffix";;
+*)smail[$service]="$Font_Black?$Font_Suffix$Back_Yellow$Font_White$Font_B$service$Font_Suffix";;
+esac
 }
 check_mail(){
-ss -tano|grep -q ":25\b"&&smail[local]=2||smail[local]=0
-if [[ smail[local] -ne 2 && -z $usePROXY ]];then
-local response=$(timeout 10 bash -c "echo -e 'QUIT\r\n' | nc -s $IP -p25 -w9 smtp.mailgun.org 25 2>&1")
-[[ $response == *"220"* ]]&&smail[local]=1
+local family=$1 local_addresses=""
+local -a mail_source_args=()
+if command -v ip >/dev/null 2>&1;then
+local_addresses=$(ip -o addr show 2>/dev/null|awk '{split($4,a,"/");print a[1]}')
+elif command -v ifconfig >/dev/null 2>&1;then
+local_addresses=$(ifconfig 2>/dev/null|awk '$1 == "inet" || $1 == "inet6" {split($2,a,"%");print a[1]}')
 fi
-[[ -n $usePROXY ]]&&smail[local]=0
+if printf '%s\n' "$local_addresses"|grep -Fxq -- "$IP";then mail_source_args=(-s "$IP");fi
+smailstatus=()
+smail_reason=()
+smail[port25]=null
+smail[local]=2
 smail[remote]=0
 services=("Gmail" "Outlook" "Yahoo" "Apple" "QQ" "MailRU" "AOL" "GMX" "MailCOM" "163" "Sohu" "Sina")
 for service in "${services[@]}";do
@@ -1793,9 +1848,19 @@ local temp_info="$Font_Cyan$Font_B${sinfo[mail]}$Font_I$service$Font_Suffix "
 ((ibar_step+=3))
 show_progress_bar "$temp_info" $((40-1-${#service}-${sinfo[lmail]}))&
 bar_pid="$!"&&disown "$bar_pid"
-check_email_service $service
+check_email_service "$service" "$family"
 kill_progress_bar
+if [[ ${smailstatus[$service]} == true ]];then
+smail[port25]=true
+elif [[ ${smailstatus[$service]} == false && ${smail[port25]} == null ]];then
+smail[port25]=false
+fi
 done
+case ${smail[port25]} in
+true)smail[local]=1;smail[port_reason]="";;
+false)smail[local]=0;smail[port_reason]=$(mail_reason "已检测的邮件服务器均无法连接 25 端口" "No tested mail server is reachable on port 25");;
+*)smail[port_reason]=$(mail_reason "未能取得检测结果，请查看各邮件服务的原因" "No test result; see the reason for each mail service");;
+esac
 }
 check_dnsbl_parallel(){
 ip_to_check=$1
@@ -2171,15 +2236,11 @@ echo -ne "\r$Font_Cyan${smail[port]}$Font_Suffix${smail[occupied]}\n"
 else
 echo -ne "\r$Font_Cyan${smail[port]}$Font_Suffix${smail[no]}\n"
 fi
-if [ ${smail[remote]} -eq 1 ];then
 echo -ne "\r$Font_Cyan${smail[provider]}$Font_Suffix"
 for service in "${services[@]}";do
 echo -ne "${smail[$service]}"
 done
 echo ""
-else
-echo -ne "\r$Font_Cyan${smail[provider]}${smail[blocked]}$Font_Suffix\n"
-fi
 [[ $1 -eq 4 ]]&&echo -ne "\r${smail[sdnsbl]}\n"
 }
 show_tail(){
@@ -2476,25 +2537,17 @@ media_updates+=".Media |= . * { AmazonPrimeVideo: { Type: \"$(clean_ansi "${amaz
 media_updates+=".Media |= . * { Reddit: { Type: \"$(clean_ansi "${reddit[utype]:-null}")\" } } | "
 media_updates+=".Media |= . * { ChatGPT: { Type: \"$(clean_ansi "${chatgpt[utype]:-null}")\" } } | "
 media_updates+=".Media |= . * { Claude: { Type: \"$(clean_ansi "${claude[utype]:-null}")\" } } | "
-if [[ ${smail[local]} -eq 1 ]];then
-mail_updates+=".Mail |= . + { Port25: true } | "
+mail_updates+=".Mail |= . + { Port25: ${smail[port25]:-null}, ProbeVersion: 1, Diagnostics: {} } | "
 for service in "${services[@]}";do
-if [[ ${smailstatus[$service]} == "true" ]];then
-mail_updates+=".Mail |= . + { \"$service\": true } | "
-else
-mail_updates+=".Mail |= . + { \"$service\": false } | "
+mail_updates+=".Mail |= . + { \"$service\": ${smailstatus[$service]:-null} } | "
+if [[ -n ${smail_reason[$service]} ]];then
+local reason_json=$(jq -cn --arg reason "${smail_reason[$service]}" '$reason')
+mail_updates+=".Mail.Diagnostics |= . + { \"$service\": $reason_json } | "
 fi
 done
-elif [[ ${smail[local]} -eq 2 ]];then
-mail_updates+=".Mail |= . + { Port25: null } | "
-for service in "${services[@]}";do
-mail_updates+=".Mail |= . + { \"$service\": null } | "
-done
-else
-mail_updates+=".Mail |= . + { Port25: false } | "
-for service in "${services[@]}";do
-mail_updates+=".Mail |= . + { \"$service\": false } | "
-done
+if [[ -n ${smail[port_reason]} ]];then
+local reason_json=$(jq -cn --arg reason "${smail[port_reason]}" '$reason')
+mail_updates+=".Mail.Diagnostics |= . + { Port25: $reason_json } | "
 fi
 mail_updates+=".Mail |= . * { DNSBlacklist: { Total: ${smail[t]:-null} } } | "
 mail_updates+=".Mail |= . * { DNSBlacklist: { Clean: ${smail[c]:-null} } } | "
@@ -2535,7 +2588,7 @@ MediaUnlockTest_PrimeVideo_Region $2
 MediaUnlockTest_Reddit $2
 OpenAITest $2
 ClaudeTest $2
-check_mail
+check_mail "$2"
 [[ $2 -eq 4 ]]&&check_dnsbl "$IP" 50
 echo -ne "$Font_LineClear" 1>&2
 if [[ $mode_lite -eq 0 ]];then
