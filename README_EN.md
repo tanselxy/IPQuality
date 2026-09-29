@@ -1,8 +1,15 @@
 <p align="center">
-<img src="https://hits.xykt.de/ip.svg?action=view&count_bg=%2379C83D&title_bg=%23555555&title=Runs&edge_flat=false"/> 
-<img src="https://hits.xykt.de/ip_github.svg?action=hit&count_bg=%233DC8C0&title_bg=%23555555&title=Visits&edge_flat=false"/> 
 <a href="/LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="license" /></a>  
 </p>
+
+> [!NOTE]
+> This repository is a fork of [xykt/IPQuality](https://github.com/xykt/IPQuality), pinned by commit for the Webmaster Monitoring Platform agent. Changes since 2026-09-29:
+> - Added a Claude check (JSON `Media.Claude`): the egress region reported by `claude.ai/cdn-cgi/trace` is matched against [Anthropic's supported regions](https://www.anthropic.com/supported-countries); a redirect to the unavailable page is reported as blocked
+> - `ref/` data files are pinned to the commit in the script's `ref_commit` instead of upstream `main`
+> - Removed the run counter (hits.xykt.de) and ad downloads
+> - Fixed the blacklist check failing with macOS BSD xargs
+>
+> Everything else matches upstream and remains under AGPL-3.0.
 
 ## IP Quality Check Script  -  [IP质量体检脚本 (中文)](https://github.com/xykt/IPQuality/blob/main/README.md)
 
@@ -14,7 +21,7 @@
 - Six modules: Basic Information, IP Type, Risk Score, Risk Factors, Streaming Media Unlocking, and Post Office Check
 - Basic data sourced from the *Maxmind* database
 - Risk information integrated from multiple databases: *IPinfo / ipregistry / ipapi / AbuseIPDB / IP2Location / IPQS / DB-IP / Scamalytics*
-- Streaming and AI service providers' unlocking and type detection: *TikTok / Disney+ / Netflix / Youtube / AmazonPrimeVideo / Reddit / ChatGPT*
+- Streaming and AI service providers' unlocking and type detection: *TikTok / Disney+ / Netflix / Youtube / AmazonPrimeVideo / Reddit / ChatGPT / Claude*
 - Connectivity tests for multiple email providers: *Gmail / Outlook / Yahoo / Apple / QQ / Mail.ru / AOL / GMX / Mail.com / 163 / Sohu / Sina*
 - Over 400 IP address blacklist database checks
 

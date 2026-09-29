@@ -1,8 +1,15 @@
 <p align="center">
-<img src="https://hits.xykt.de/ip.svg?action=view&count_bg=%2379C83D&title_bg=%23555555&title=Runs&edge_flat=false"/> 
-<img src="https://hits.xykt.de/ip_github.svg?action=hit&count_bg=%233DC8C0&title_bg=%23555555&title=Visits&edge_flat=false"/> 
 <a href="/LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="license" /></a>  
 </p>
+
+> [!NOTE]
+> 本仓库是 [xykt/IPQuality](https://github.com/xykt/IPQuality) 的 fork，供站长监控平台 Agent 按固定提交调用。2026-09-29 起的改动：
+> - 新增 Claude 检测（JSON `Media.Claude`）：按 `claude.ai/cdn-cgi/trace` 识别的出口地区对照 [Anthropic 支持地区](https://www.anthropic.com/supported-countries)；首页跳转不可用页面时直接判为屏蔽
+> - `ref/` 数据文件固定到脚本内 `ref_commit` 指定的提交，不再读取上游 `main`
+> - 去掉运行计数（hits.xykt.de）与广告拉取
+> - 修复 macOS 自带 BSD xargs 导致的黑名单检测失败
+>
+> 其余代码与上游一致，许可证沿用 AGPL-3.0。
 
 ## IP质量体检脚本  -  [IP Quality Check Script (EN)](https://github.com/xykt/IPQuality/blob/main/README_EN.md)
 
@@ -14,7 +21,7 @@
 - 基础信息、IP类型、风险评分、风险因子、流媒体解锁、邮局检测六大模块
 - 基础数据源自*Maxmind*数据库
 - 风险信息 *IPinfo / ipregistry / ipapi / AbuseIPDB / IP2Location / IPQS / DB-IP / Scamalytics* 多数据库整合
-- 流媒体及AI多个服务商 *TikTok / Disney+ / Netflix / Youtube / AmazonPrimeVideo / Reddit / ChatGPT* 解锁及解锁类型检测
+- 流媒体及AI多个服务商 *TikTok / Disney+ / Netflix / Youtube / AmazonPrimeVideo / Reddit / ChatGPT / Claude* 解锁及解锁类型检测
 - 多邮局服务商 *Gmail / Outlook / Yahoo / Apple / QQ / Mail.ru / AOL / GMX / Mail.com / 163 / Sohu / Sina* 连通性检测
 - IP地址黑名单400+数据库检测
 

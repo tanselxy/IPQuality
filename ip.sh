@@ -1,5 +1,11 @@
 #!/bin/bash
-script_version="v2026-09-16"
+# 基于 xykt/IPQuality（AGPL-3.0）的 fork，2026-09-29 修改：
+# ref/ 数据文件固定到 ref_commit，去掉运行计数与广告，新增 Claude 检测。
+script_version="v2026-09-16-tansel.1"
+ref_commit="2384a67c756eb35231f5982b34731e522be3653e"
+# Claude.ai 与商业 API 的支持地区（两份名单相同），ISO 3166-1 alpha-2。
+# 来源 https://www.anthropic.com/supported-countries ，2026-09-29 整理。
+claude_regions="AD AE AG AL AM AO AR AT AU AZ BA BB BD BE BF BG BH BI BJ BN BO BR BS BT BW BZ CA CD CF CG CH CI CL CM CO CR CV CY CZ DE DJ DK DM DO DZ EC EE EG ER ES ET FI FJ FM FR GA GB GD GE GH GM GN GQ GR GT GW GY HN HR HT HU ID IE IL IN IQ IS IT JM JO JP KE KG KH KI KM KN KR KW KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MG MH MK ML MN MR MT MU MV MW MX MY MZ NA NE NG NI NL NO NP NR NZ OM PA PE PG PH PK PL PS PT PW PY QA RO RS RW SA SB SC SD SE SG SI SK SL SM SN SO SR SS ST SV SZ TD TG TH TJ TL TM TN TO TR TT TV TW TZ UA UG US UY UZ VA VC VN VU WS ZA ZM ZW"
 check_bash(){
 current_bash_version=$(bash --version|head -n 1|awk -F ' ' '{for (i=1; i<=NF; i++) if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+/) {print $i; exit}}'|cut -d . -f 1)
 if [ "$current_bash_version" = "0" ]||[ "$current_bash_version" = "1" ]||[ "$current_bash_version" = "2" ]||[ "$current_bash_version" = "3" ];then
@@ -33,8 +39,6 @@ Back_White="\033[47m"
 Font_Suffix="\033[0m"
 Font_LineClear="\033[2K"
 Font_LineUp="\033[1A"
-declare ADLines
-declare -A aad
 declare IP=""
 declare IPhide
 declare fullIP=0
@@ -56,6 +60,7 @@ declare -A youtube
 declare -A amazon
 declare -A reddit
 declare -A chatgpt
+declare -A claude
 declare IPV4
 declare IPV6
 declare IPV4check=1
@@ -242,9 +247,7 @@ smail[available]="$Font_Suffix${Font_Cyan}Active $Font_B"
 smail[clean]="$Font_Suffix${Font_Green}Clean $Font_B"
 smail[marked]="$Font_Suffix${Font_Yellow}Marked $Font_B"
 smail[blacklisted]="$Font_Suffix${Font_Red}Blacklisted $Font_B"
-stail[stoday]="IP Checks Today: "
-stail[stotal]="; Total: "
-stail[thanks]=". Thanks for running xy scripts!"
+stail[thanks]="Thanks for running xy scripts!"
 stail[link]="${Font_I}Report Link: $Font_U"
 ;;
 "cn")swarn[1]="错误：不支持的参数！"
@@ -367,18 +370,11 @@ smail[available]="$Font_Suffix$Font_Cyan有效 $Font_B"
 smail[clean]="$Font_Suffix$Font_Green正常 $Font_B"
 smail[marked]="$Font_Suffix$Font_Yellow已标记 $Font_B"
 smail[blacklisted]="$Font_Suffix$Font_Red黑名单 $Font_B"
-stail[stoday]="今日IP检测量："
-stail[stotal]="；总检测量："
-stail[thanks]="。感谢使用xy系列脚本！"
+stail[thanks]="感谢使用xy系列脚本！"
 stail[link]="$Font_I报告链接：$Font_U"
 ;;
 *)echo -ne "ERROR: Language not supported!"
 esac
-}
-countRunTimes(){
-local RunTimes=$(curl $CurlARG -s --max-time 10 "https://hits.xykt.de/ip?action=hit" 2>&1)
-stail[today]=$(echo "$RunTimes"|jq '.daily')
-stail[total]=$(echo "$RunTimes"|jq '.total')
 }
 show_progress_bar(){
 show_progress_bar_ "$@" 1>&2
@@ -521,10 +517,10 @@ local timeout=2
 local http_code
 http_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout "$timeout" "$url" 2>/dev/null)
 if [[ $http_code == "204" ]];then
-rawgithub="https://github.com/xykt/IPQuality/raw/"
+rawgithub="https://github.com/tanselxy/IPQuality/raw/"
 return 0
 else
-rawgithub="https://testingcf.jsdelivr.net/gh/xykt/IPQuality@"
+rawgithub="https://testingcf.jsdelivr.net/gh/tanselxy/IPQuality@"
 return 1
 fi
 }
@@ -802,7 +798,7 @@ ipinfo[proxy]=$(echo "$RESPONSE"|jq -r '.data.privacy.proxy')
 ipinfo[tor]=$(echo "$RESPONSE"|jq -r '.data.privacy.tor')
 ipinfo[vpn]=$(echo "$RESPONSE"|jq -r '.data.privacy.vpn')
 ipinfo[server]=$(echo "$RESPONSE"|jq -r '.data.privacy.hosting')
-local ISO3166=$(curl -sL -m 10 "${rawgithub}main/ref/iso3166.json")
+local ISO3166=$(curl -sL -m 10 "${rawgithub}$ref_commit/ref/iso3166.json")
 ipinfo[asn]=$(echo "$RESPONSE"|jq -r '.data.asn.asn'|sed 's/^AS//')
 ipinfo[org]=$(echo "$RESPONSE"|jq -r '.data.asn.name')
 ipinfo[city]=$(echo "$RESPONSE"|jq -r '.data.city')
@@ -1697,6 +1693,37 @@ chatgpt[uregion]="${smedia[nodata]}"
 chatgpt[utype]="${smedia[nodata]}"
 fi
 }
+function ClaudeTest(){
+local temp_info="$Font_Cyan$Font_B${sinfo[ai]}${Font_I}Claude $Font_Suffix"
+((ibar_step+=3))
+show_progress_bar "$temp_info" $((40-7-${sinfo[lai]}))&
+bar_pid="$!"&&disown "$bar_pid"
+trap "kill_progress_bar" RETURN
+claude=()
+local checkunlockurl="claude.ai"
+local result1=$(Check_DNS_1 $checkunlockurl)
+local result2=$(Check_DNS_2 $checkunlockurl)
+local result3=$(Check_DNS_3 $checkunlockurl)
+local resultunlocktype=$(Get_Unlock_Type $result1 $result2 $result3)
+# 不支持的地区首页会跳转 app-unavailable-in-region；curl 通常只拿到 Cloudflare 验证页，
+# 因此再按 Anthropic 边缘节点识别的出口地区对照支持名单。
+local redirect=$(curl $CurlARG -$1 -sS -o /dev/null --max-time 10 --user-agent "$UA_Browser" -w '%{redirect_url}' "https://claude.ai/" 2>/dev/null)
+local region=$(curl $CurlARG -$1 -sS --max-time 10 "https://claude.ai/cdn-cgi/trace" 2>/dev/null|sed -n 's/^loc=\([A-Z0-9][A-Z0-9]\)$/\1/p')
+if [[ $redirect == *"app-unavailable-in-region"* ]]||[[ -n $region && " $claude_regions " != *" $region "* ]];then
+claude[ustatus]="${smedia[no]}"
+claude[uregion]="${smedia[nodata]}"
+[[ -n $region ]]&&claude[uregion]="  [$region]   "
+claude[utype]="${smedia[nodata]}"
+elif [ -n "$region" ];then
+claude[ustatus]="${smedia[yes]}"
+claude[uregion]="  [$region]   "
+claude[utype]="$resultunlocktype"
+else
+claude[ustatus]="${smedia[bad]}"
+claude[uregion]="${smedia[nodata]}"
+claude[utype]="${smedia[nodata]}"
+fi
+}
 get_sorted_mx_records(){
 local domain=$1
 dig +short MX $domain|sort -n|head -1|awk '{print $2}'
@@ -1781,7 +1808,7 @@ local total=0
 local clean=0
 local blacklisted=0
 local other=0
-curl $CurlARG -sL "${rawgithub}main/ref/dnsbl.list"|sort -u|xargs -P "$parallel_jobs" -I {} bash -c "result=\$(dig +short \"$reversed_ip.{}\" A); if [[ -z \"\$result\" ]]; then echo 'Clean'; elif [[ \"\$result\" =~ ^127\.255\.255\. ]]; then echo 'Clean'; elif [[ \"\$result\" == '127.0.0.2' ]]; then echo 'Blacklisted'; else echo 'Other'; fi"|{
+curl $CurlARG -sL "${rawgithub}$ref_commit/ref/dnsbl.list"|sort -u|xargs -P "$parallel_jobs" -n 1 bash -c "result=\$(dig +short \"$reversed_ip.\$1\" A); if [[ -z \"\$result\" ]]; then echo 'Clean'; elif [[ \"\$result\" =~ ^127\.255\.255\. ]]; then echo 'Clean'; elif [[ \"\$result\" == '127.0.0.2' ]]; then echo 'Blacklisted'; else echo 'Other'; fi" _|{
 while IFS= read -r line;do
 ((total++))
 case "$line" in
@@ -2129,10 +2156,10 @@ echo -ne "\r$Font_Cyan${sfactor[robot]}$Font_Suffix$tmp_factor\n"
 }
 show_media(){
 echo -ne "\r${smedia[title]}\n"
-echo -ne "\r$Font_Cyan${smedia[meida]}$Font_I TikTok   Disney+  Netflix Youtube  AmazonPV  Reddit   ChatGPT $Font_Suffix\n"
-echo -ne "\r$Font_Cyan${smedia[status]}${tiktok[ustatus]}${disney[ustatus]}${netflix[ustatus]}${youtube[ustatus]}${amazon[ustatus]}${reddit[ustatus]}${chatgpt[ustatus]}$Font_Suffix\n"
-echo -ne "\r$Font_Cyan${smedia[region]}$Font_Green${tiktok[uregion]}${disney[uregion]}${netflix[uregion]}${youtube[uregion]}${amazon[uregion]}${reddit[uregion]}${chatgpt[uregion]}$Font_Suffix\n"
-echo -ne "\r$Font_Cyan${smedia[type]}${tiktok[utype]}${disney[utype]}${netflix[utype]}${youtube[utype]}${amazon[utype]}${reddit[utype]}${chatgpt[utype]}$Font_Suffix\n"
+echo -ne "\r$Font_Cyan${smedia[meida]}$Font_I TikTok   Disney+  Netflix Youtube  AmazonPV  Reddit   ChatGPT  Claude  $Font_Suffix\n"
+echo -ne "\r$Font_Cyan${smedia[status]}${tiktok[ustatus]}${disney[ustatus]}${netflix[ustatus]}${youtube[ustatus]}${amazon[ustatus]}${reddit[ustatus]}${chatgpt[ustatus]}${claude[ustatus]}$Font_Suffix\n"
+echo -ne "\r$Font_Cyan${smedia[region]}$Font_Green${tiktok[uregion]}${disney[uregion]}${netflix[uregion]}${youtube[uregion]}${amazon[uregion]}${reddit[uregion]}${chatgpt[uregion]}${claude[uregion]}$Font_Suffix\n"
+echo -ne "\r$Font_Cyan${smedia[type]}${tiktok[utype]}${disney[utype]}${netflix[utype]}${youtube[utype]}${amazon[utype]}${reddit[utype]}${chatgpt[utype]}${claude[utype]}$Font_Suffix\n"
 }
 show_mail(){
 echo -ne "\r${smail[title]}\n"
@@ -2156,7 +2183,7 @@ fi
 }
 show_tail(){
 echo -ne "\r$(printf '%72s'|tr ' ' '=')\n"
-echo -ne "\r$Font_I${stail[stoday]}${stail[today]}${stail[stotal]}${stail[total]}${stail[thanks]} $Font_Suffix\n"
+echo -ne "\r$Font_I${stail[thanks]} $Font_Suffix\n"
 echo -e ""
 }
 get_opts(){
@@ -2248,76 +2275,9 @@ show_help(){
 echo -ne "\r$shelp\n"
 exit 0
 }
-show_ad(){
-RANDOM=$(date +%s)
-local -a ads=()
-local i=1
-while :;do
-local content
-content=$(curl -fsL --max-time 5 "${rawgithub}main/ref/ad$i.ans")||break
-ads+=("$content")
-((i++))
-done
-ADLines=0
-local adCount=${#ads[@]}
-[[ $adCount -eq 0 ]]&&return
-local -a indices=()
-for ((i=1; i<=adCount; i++));do indices+=("$i");done
-for ((i=adCount-1; i>0; i--));do
-local j=$((RANDOM%(i+1)))
-local tmp=${indices[i]}
-indices[i]=${indices[j]}
-indices[j]=$tmp
-done
-local -a aad
-aad[0]=$(curl -sL --max-time 5 "${rawgithub}main/ref/sponsor.ans")
-for ((i=0; i<adCount; i++));do
-aad[${indices[i]}]="${ads[i]}"
-done
-local rows cols
-if ! read rows cols < <(stty size 2>/dev/null);then cols=0;fi
-print_pair(){
-local left="$1" right="$2"
-local -a L R
-mapfile -t L <<<"$left"
-mapfile -t R <<<"$right"
-local i
-for ((i=0; i<12; i++));do
-printf "%-72s$Font_Suffix     %-72s\n" "${L[i]}" "${R[i]}" 1>&2
-done
-ADLines=$((ADLines+12))
-}
-print_block(){
-echo "$1" 1>&2
-ADLines=$((ADLines+12))
-}
-if [[ $cols -ge 150 ]];then
-if ((adCount==0));then
-print_block "${aad[0]}"
-elif ((adCount%2==1));then
-print_pair "${aad[0]}" "${aad[1]}"
-local k
-for ((k=2; k<=adCount; k+=2));do
-print_pair "${aad[$k]}" "${aad[$((k+1))]}"
-done
-else
-print_block "${aad[0]}"
-local k
-for ((k=1; k<=adCount; k+=2));do
-print_pair "${aad[$k]}" "${aad[$((k+1))]}"
-done
-fi
-else
-echo "${aad[0]}" 1>&2
-for ((i=1; i<=adCount; i++));do
-echo "${aad[$i]}" 1>&2
-done
-ADLines=$(((adCount+1)*12))
-fi
-}
 read_ref(){
-Media_Cookie=$(curl $CurlARG -sL --retry 3 --max-time 10 "${rawgithub}main/ref/cookies.txt")
-IATA_Database="${rawgithub}main/ref/iata-icao.csv"
+Media_Cookie=$(curl $CurlARG -sL --retry 3 --max-time 10 "${rawgithub}$ref_commit/ref/cookies.txt")
+IATA_Database="${rawgithub}$ref_commit/ref/iata-icao.csv"
 }
 clean_ansi(){
 local input="$1"
@@ -2497,6 +2457,7 @@ media_updates+=".Media |= . * { Youtube: { Status: \"$(clean_ansi "${youtube[ust
 media_updates+=".Media |= . * { AmazonPrimeVideo: { Status: \"$(clean_ansi "${amazon[ustatus]:-null}")\" } } | "
 media_updates+=".Media |= . * { Reddit: { Status: \"$(clean_ansi "${reddit[ustatus]:-null}")\" } } | "
 media_updates+=".Media |= . * { ChatGPT: { Status: \"$(clean_ansi "${chatgpt[ustatus]:-null}")\" } } | "
+media_updates+=".Media |= . * { Claude: { Status: \"$(clean_ansi "${claude[ustatus]:-null}")\" } } | "
 media_updates+=".Media |= . * { TikTok: { Region: \"$(clean_ansi "${tiktok[uregion]//[][]/}")\" } } | "
 media_updates+=".Media |= . * { DisneyPlus: { Region: \"$(clean_ansi "${disney[uregion]//[][]/}")\" } } | "
 media_updates+=".Media |= . * { Netflix: { Region: \"$(clean_ansi "${netflix[uregion]//[][]/}")\" } } | "
@@ -2504,6 +2465,7 @@ media_updates+=".Media |= . * { Youtube: { Region: \"$(clean_ansi "${youtube[ure
 media_updates+=".Media |= . * { AmazonPrimeVideo: { Region: \"$(clean_ansi "${amazon[uregion]//[][]/}")\" } } | "
 media_updates+=".Media |= . * { Reddit: { Region: \"$(clean_ansi "${reddit[uregion]//[][]/}")\" } } | "
 media_updates+=".Media |= . * { ChatGPT: { Region: \"$(clean_ansi "${chatgpt[uregion]//[][]/}")\" } } | "
+media_updates+=".Media |= . * { Claude: { Region: \"$(clean_ansi "${claude[uregion]//[][]/}")\" } } | "
 media_updates+=".Media |= . * { TikTok: { Type: \"$(clean_ansi "${tiktok[utype]:-null}")\" } } | "
 media_updates+=".Media |= . * { DisneyPlus: { Type: \"$(clean_ansi "${disney[utype]:-null}")\" } } | "
 media_updates+=".Media |= . * { Netflix: { Type: \"$(clean_ansi "${netflix[utype]:-null}")\" } } | "
@@ -2511,6 +2473,7 @@ media_updates+=".Media |= . * { Youtube: { Type: \"$(clean_ansi "${youtube[utype
 media_updates+=".Media |= . * { AmazonPrimeVideo: { Type: \"$(clean_ansi "${amazon[utype]:-null}")\" } } | "
 media_updates+=".Media |= . * { Reddit: { Type: \"$(clean_ansi "${reddit[utype]:-null}")\" } } | "
 media_updates+=".Media |= . * { ChatGPT: { Type: \"$(clean_ansi "${chatgpt[utype]:-null}")\" } } | "
+media_updates+=".Media |= . * { Claude: { Type: \"$(clean_ansi "${claude[utype]:-null}")\" } } | "
 if [[ ${smail[local]} -eq 1 ]];then
 mail_updates+=".Mail |= . + { Port25: true } | "
 for service in "${services[@]}";do
@@ -2551,7 +2514,6 @@ ipjson='{
     }'
 [[ $2 -eq 4 ]]&&hide_ipv4 $IP
 [[ $2 -eq 6 ]]&&hide_ipv6 $IP
-countRunTimes
 db_maxmind $2
 db_ipinfo
 [[ $mode_lite -eq 0 ]]&&db_scamalytics $2||scamalytics=()
@@ -2569,15 +2531,10 @@ MediaUnlockTest_YouTube_Premium $2
 MediaUnlockTest_PrimeVideo_Region $2
 MediaUnlockTest_Reddit $2
 OpenAITest $2
+ClaudeTest $2
 check_mail
 [[ $2 -eq 4 ]]&&check_dnsbl "$IP" 50
 echo -ne "$Font_LineClear" 1>&2
-if [ $2 -eq 4 ]||[[ $IPV4work -eq 0 || $IPV4check -eq 0 ]];then
-for ((i=0; i<ADLines; i++));do
-echo -ne "$Font_LineUp" 1>&2
-echo -ne "$Font_LineClear" 1>&2
-done
-fi
 if [[ $mode_lite -eq 0 ]];then
 local ip_report=$(show_head
 show_basic
@@ -2630,6 +2587,5 @@ echo -ne "\r$Font_B$Font_Red${swarn[$ERRORcode]}$Font_Suffix\n"
 exit $ERRORcode
 fi
 clear
-show_ad
 [[ $IPV4work -ne 0 && $IPV4check -ne 0 ]]&&check_IP "$IPV4" 4
 [[ $IPV6work -ne 0 && $IPV6check -ne 0 ]]&&check_IP "$IPV6" 6
