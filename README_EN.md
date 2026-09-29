@@ -8,6 +8,7 @@
 > - `ref/` data files are pinned to the commit in the script's `ref_commit` instead of upstream `main`
 > - Removed the run counter (hits.xykt.de) and ad downloads
 > - Fixed the blacklist check failing with macOS BSD xargs
+> - Added a JSON `Rating` section with source-provided ratings (currently ipapi's `Very Low` / `Low` / `Elevated` / `High` / `Very High`)
 >
 > Everything else matches upstream and remains under AGPL-3.0.
 

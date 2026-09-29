@@ -8,6 +8,7 @@
 > - `ref/` 数据文件固定到脚本内 `ref_commit` 指定的提交，不再读取上游 `main`
 > - 去掉运行计数（hits.xykt.de）与广告拉取
 > - 修复 macOS 自带 BSD xargs 导致的黑名单检测失败
+> - JSON 新增 `Rating`，保存来源自带的文字评级（目前为 ipapi 的 `Very Low` / `Low` / `Elevated` / `High` / `Very High`）
 >
 > 其余代码与上游一致，许可证沿用 AGPL-3.0。
 

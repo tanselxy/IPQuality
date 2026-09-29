@@ -1,7 +1,8 @@
 #!/bin/bash
 # 基于 xykt/IPQuality（AGPL-3.0）的 fork，2026-09-29 修改：
 # ref/ 数据文件固定到 ref_commit，去掉运行计数与广告，新增 Claude 检测。
-script_version="v2026-09-16-tansel.1"
+# 2026-09-29：JSON 新增 Rating，保存来源自带的文字评级（目前为 ipapi）。
+script_version="v2026-09-16-tansel.2"
 ref_commit="2384a67c756eb35231f5982b34731e522be3653e"
 # Claude.ai 与商业 API 的支持地区（两份名单相同），ISO 3166-1 alpha-2。
 # 来源 https://www.anthropic.com/supported-countries ，2026-09-29 整理。
@@ -2384,6 +2385,7 @@ type_updates+=".Type |= . * { Company: { IP2LOCATION: \"$(clean_ansi "${ip2locat
 score_updates+=".Score |= . + { IP2LOCATION: \"${ip2location[score]:-null}\" } | "
 score_updates+=".Score |= . + { SCAMALYTICS: \"${scamalytics[score]:-null}\" } | "
 score_updates+=".Score |= . + { ipapi: \"${ipapi[score]:-null}\" } | "
+score_updates+=".Rating |= . + { ipapi: \"${ipapi[risktext]:-null}\" } | "
 score_updates+=".Score |= . + { AbuseIPDB: \"${abuseipdb[score]:-null}\" } | "
 score_updates+=".Score |= . + { IPQS: \"${ipapi[ipqs]:-null}\" } | "
 score_updates+=".Score |= . + { DBIP: \"${dbip[score]:-null}\" } | "
@@ -2508,6 +2510,7 @@ ipjson='{
       "Info": {},
       "Type": {},
       "Score": {},
+      "Rating": {},
       "Factor": {},
       "Media": {},
       "Mail": {}
